@@ -258,6 +258,19 @@ button:active{transform:scale(.96)}
     <div class="btns"><button class="btn-primary" style="flex:1" onclick="saveInfo()">保存基础信息</button></div>
   </div>
   <div class="card">
+    <h3>📏 围度记录</h3>
+    <div class="sub">建议每周固定一天量（早晨空腹、同一时段更准）· <span id="measure-gap">还没有记录</span></div>
+    <div class="form-item"><label>测量日期</label><input type="date" id="measure-date"></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div class="form-item"><label>臂围 cm</label><input id="m-arm" type="number" step="0.1" class="half-input" placeholder="如 33.5"></div>
+      <div class="form-item"><label>胸围 cm</label><input id="m-chest" type="number" step="0.1" class="half-input" placeholder="如 98.0"></div>
+      <div class="form-item"><label>腰围 cm</label><input id="m-waist" type="number" step="0.1" class="half-input" placeholder="如 85.5"></div>
+      <div class="form-item"><label>臀围 cm</label><input id="m-hip" type="number" step="0.1" class="half-input" placeholder="如 96.0"></div>
+    </div>
+    <div class="btns"><button class="btn-primary" style="flex:1" onclick="saveMeasure()">保存围度</button></div>
+    <div id="measure-history" style="margin-top:6px"></div>
+  </div>
+  <div class="card">
     <h3>目标模式</h3>
     <div class="sub">自动 = 跟随最新体重每天重算（推荐）；手动 = 自己定死目标</div>
     <div class="form-item">
@@ -287,13 +300,18 @@ button:active{transform:scale(.96)}
   <div class="card">
     <h3>数据管理</h3>
     <div class="btns">
+      <button class="btn-primary" style="flex:1" onclick="exportBackup()">📦 备份数据</button>
+      <button class="btn-gray" style="flex:1" onclick="document.getElementById('import-file').click()">📥 恢复备份</button>
+    </div>
+    <input type="file" id="import-file" accept=".json" style="display:none" onchange="importBackup(this)">
+    <div class="btns">
       <button class="btn-gray" style="flex:1" onclick="exportCSV()">导出CSV</button>
     </div>
     <div class="btns">
       <button class="btn-gray" style="flex:1" onclick="clearRecords()">清空记录</button>
       <button class="btn-gray" style="flex:1" onclick="clearLib()">清空营养库</button>
     </div>
-    <div style="font-size:12px;color:var(--ink-3);margin-top:6px">清空记录=饮食/睡眠/运动/体重，基础信息保留；清空营养库=自定义食物+内置食物的修改</div>
+    <div style="font-size:12px;color:var(--ink-3);margin-top:6px">升级/换手机前先「备份数据」存到手机，装好新版后点「恢复备份」选文件即可全部还原；清空记录=饮食/睡眠/运动/体重/围度，基础信息保留</div>
   </div>
 </div>
 
@@ -381,12 +399,14 @@ let appData = JSON.parse(localStorage.getItem("dietData")) || {
   targetMode:"auto",
   manualTarget:{kcal:2000,pro:120,carb:250,fat:70},
   weightList:[],
-  dayRecords:{}
+  dayRecords:{},
+  measureList:[]
 }
 // 兼容旧数据
 if(!appData.targetMode) appData.targetMode = "auto"
 if(!appData.manualTarget) appData.manualTarget = {kcal:2000,pro:120,carb:250,fat:70}
 if(appData.info.goalAdjust===undefined) appData.info.goalAdjust = -300
+if(!appData.measureList) appData.measureList = []
 // 本地时区日期（避免 UTC 导致凌晨算成昨天）
 function localToday(){
   const d = new Date()
@@ -462,6 +482,7 @@ document.querySelectorAll(".tab-item").forEach(t=>{
     if(pid==="stat") renderWeightChart()
     if(pid==="setting") fillSettingForm()
     if(pid==="setting") renderFoodLib()
+    if(pid==="setting") renderMeasureHistory()
     if(pid==="nutri") renderNutriLib()
   }
 })
@@ -727,6 +748,65 @@ function saveWeight(){
   const t = computeTargets()
   toast(`体重已记录 ✓ ${viewDate<today?fmtDateCN(viewDate)+" ":""}目标已更新：${t.kcal} kcal / 蛋白 ${t.pro}g`)
 }
+// ---------- 围度记录（每周量一次） ----------
+function saveMeasure(){
+  const date = document.getElementById("measure-date").value
+  if(!date) return toast("先选测量日期")
+  if(date > today) return toast("不能记录未来的日子哦")
+  const arm = Number(document.getElementById("m-arm").value)
+  const chest = Number(document.getElementById("m-chest").value)
+  const waist = Number(document.getElementById("m-waist").value)
+  const hip = Number(document.getElementById("m-hip").value)
+  if(!arm && !chest && !waist && !hip) return toast("四个围度至少填一个")
+  const rec = {}
+  if(arm) rec.arm=arm; if(chest) rec.chest=chest; if(waist) rec.waist=waist; if(hip) rec.hip=hip
+  const exist = appData.measureList.find(x=>x.date===date)
+  if(exist) Object.assign(exist, rec)
+  else appData.measureList.push({date, ...rec})
+  appData.measureList.sort((a,b)=>a.date<b.date?-1:1)
+  saveData(); renderMeasureHistory()
+  toast(`围度已记录 ✓ ${date<today?fmtDateCN(date):"今天"}的数据已保存`)
+}
+function delMeasure(date){
+  if(!confirm(`删除 ${fmtDateCN(date)} 的围度记录？`)) return
+  appData.measureList = appData.measureList.filter(x=>x.date!==date)
+  saveData(); renderMeasureHistory(); toast("已删除")
+}
+function measureGapHint(){
+  const el = document.getElementById("measure-gap")
+  if(!appData.measureList.length){ el.innerText="还没有记录，先量第一次吧"; return }
+  const last = appData.measureList[appData.measureList.length-1].date
+  const days = Math.floor((new Date(today)-new Date(last))/86400000)
+  if(days===0) el.innerText="今天刚量过 ✓"
+  else if(days<7) el.innerText=`上次 ${days} 天前，继续保持`
+  else el.innerText=`⚠️ 上次量已是 ${days} 天前，该量啦`
+}
+function renderMeasureHistory(){
+  measureGapHint()
+  const box = document.getElementById("measure-history")
+  const list = [...appData.measureList].reverse()
+  if(!list.length){
+    box.innerHTML = `<div style="font-size:14px;color:var(--ink-3);text-align:center;padding:10px 0 4px">还没有围度记录</div>`
+    return
+  }
+  const names = {arm:"臂围",chest:"胸围",waist:"腰围",hip:"臀围"}
+  box.innerHTML = list.map((r,idx)=>{
+    const prev = list[idx+1]  // 倒序排列，idx+1 是上一次
+    let delta = ""
+    if(prev){
+      const parts = Object.keys(names).filter(k=>r[k]&&prev[k]).map(k=>{
+        const d = Math.round((r[k]-prev[k])*10)/10
+        return d ? `${names[k]}${d>0?"+":""}${d}` : null
+      }).filter(Boolean)
+      delta = parts.length ? `<span style="font-size:12px;color:var(--ink-3)">｜较上次：${parts.join(" ")}</span>` : ""
+    }
+    const vals = Object.keys(names).filter(k=>r[k]).map(k=>`${names[k]} ${r[k]}`).join(" · ")
+    return `<div class="food-item"><div>
+      <div class="food-name">${r.date<today?fmtDateCN(r.date):"今天"}${r.date===today?"（最新）":""}</div>
+      <div class="food-nut">${vals}${delta}</div>
+    </div><div class="del-btn" onclick="delMeasure('${r.date}')">✕</div></div>`
+  }).join("")
+}
 // ---------- 渲染 ----------
 function renderToday(){
   const rec = appData.dayRecords[viewDate] || {foods:[]}
@@ -990,6 +1070,40 @@ function renderWeightChart(){
     : `<div class="food-nut" style="text-align:center;padding:20px 0">暂无运动记录</div>`
 }
 function saveData(){localStorage.setItem("dietData",JSON.stringify(appData))}
+// ---------- 备份与恢复（升级/换机数据迁移） ----------
+function exportBackup(){
+  const backup = {
+    app:"健康记录", version:2, exportedAt:new Date().toISOString(),
+    dietData: JSON.parse(localStorage.getItem("dietData")||"null"),
+    customFoodLib: JSON.parse(localStorage.getItem("customFoodLib")||"null")
+  }
+  const blob = new Blob([JSON.stringify(backup,null,2)],{type:"application/json"})
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement("a")
+  a.href=url; a.download=`健康记录备份_${today}.json`; a.click()
+  toast("备份已导出 ✓ 记得发到自己微信/网盘存一份")
+}
+function importBackup(input){
+  const file = input.files && input.files[0]
+  if(!file) return
+  const reader = new FileReader()
+  reader.onload = e => {
+    try{
+      const data = JSON.parse(e.target.result)
+      if(!data || data.app!=="健康记录" || !data.dietData) throw new Error("格式不对")
+      const n = (data.dietData.dayRecords?Object.keys(data.dietData.dayRecords).length:0)
+      if(!confirm(`确认恢复这份备份？\n包含 ${n} 天的记录数据，将覆盖手机上现有数据！`)) return
+      localStorage.setItem("dietData", JSON.stringify(data.dietData))
+      if(data.customFoodLib) localStorage.setItem("customFoodLib", JSON.stringify(data.customFoodLib))
+      else localStorage.removeItem("customFoodLib")
+      location.reload()
+    }catch(err){
+      toast("恢复失败：这不是本 App 的备份文件")
+    }
+    input.value = ""
+  }
+  reader.readAsText(file)
+}
 function exportCSV(){
   let txt = "日期,餐次,食物,重量g,蛋白g,碳水g,脂肪g,热量kcal\n"
   Object.keys(appData.dayRecords).forEach(d=>{
@@ -1003,10 +1117,11 @@ function exportCSV(){
   a.href=url;a.download="健康记录.csv";a.click()
 }
 function clearRecords(){
-  if(!confirm("确定清空全部记录？（饮食/睡眠/运动/体重记录，无法恢复！基础信息和营养库保留）")) return
+  if(!confirm("确定清空全部记录？（饮食/睡眠/运动/体重/围度记录，无法恢复！基础信息和营养库保留）")) return
   appData.weightList = []
   appData.dayRecords = {}
-  saveData(); renderToday()
+  appData.measureList = []
+  saveData(); renderToday(); renderMeasureHistory()
   if(document.getElementById("page-stat").classList.contains("active")) renderWeightChart()
   toast("记录已清空，基础信息保留")
 }
@@ -1021,7 +1136,10 @@ function clearLib(){
 // 初始化
 fillSettingForm()
 document.getElementById("record-date").max = today
+const md = document.getElementById("measure-date")
+md.max = today; md.value = today
 renderToday()
+renderMeasureHistory()
 if("serviceWorker" in navigator){
   navigator.serviceWorker.register("sw.js").catch(()=>{})
 }
